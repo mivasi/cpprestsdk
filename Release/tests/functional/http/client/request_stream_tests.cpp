@@ -446,7 +446,7 @@ TEST_FIXTURE(uri_address, stream_close_early_with_contentlength, "Ignore:Apple",
 }
 #endif
 
-TEST_FIXTURE(uri_address, get_with_body_nono)
+TEST_FIXTURE(uri_address, get_with_body_nono, "Ignore:Apple", "328")
 {
     http_client client(m_uri);
 

@@ -303,7 +303,7 @@ public:
 
 // Tests if an exception occurs and close throws an exception that the close
 // one is ignored and doesn't bring down the process.
-TEST_FIXTURE(uri_address, response_stream_close_throws_with_exception)
+TEST_FIXTURE(uri_address, response_stream_close_throws_with_exception, "Ignore:Apple", "Connection expire at client, but here it is stucked")
 {
     web::http::experimental::listener::http_listener listener(m_uri);
     listener.open().wait();

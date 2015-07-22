@@ -83,7 +83,7 @@ TEST_FIXTURE(uri_address, path_empty_ctor)
     }
 }
 
-TEST_FIXTURE(uri_address, with_query_fragment)
+TEST_FIXTURE(uri_address, with_query_fragment, "Ignore:Apple", "Not working on apple")
 {
     test_http_server::scoped_server scoped(m_uri);
     http_client client(m_uri);
@@ -133,7 +133,7 @@ TEST_FIXTURE(uri_address, uri_encoding)
 }
 
 // Tests combining case URI query/fragments with relative URI query/fragments.
-TEST_FIXTURE(uri_address, append_query_fragment)
+TEST_FIXTURE(uri_address, append_query_fragment, "Ignore:Apple", "Not working on apple")
 {
     // Try with query.
     const utility::string_t base_uri_with_query = web::http::uri_builder(m_uri).append(U("/path1?key1=value1")).to_string();

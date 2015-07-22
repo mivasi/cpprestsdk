@@ -34,24 +34,26 @@ if(UNIX)
     ${SOURCES_COMMON}
     streams/fileio_posix.cpp
     pplx/threadpool.cpp
-    http/client/http_client_asio.cpp
     http/listener/http_server_asio.cpp
   )
   if(APPLE)
     list(APPEND SOURCES
+      http/client/http_client_apple.cpp
       pplx/pplxapple.cpp
       http/client/x509_cert_utilities_apple.cpp
     )
     find_library(COREFOUNDATION CoreFoundation "/")
     find_library(SECURITY Security "/")
-    set(EXTRALINKS ${COREFOUNDATION} ${SECURITY})
+    find_library(CFNETWORK CFNetwork "/")
+	find_library(SYSTEMCONFIGURATION SystemConfiguration "/")
+    set(EXTRALINKS ${COREFOUNDATION} ${SECURITY} ${CFNETWORK} ${SYSTEMCONFIGURATION})
   elseif(ANDROID)
     list(APPEND SOURCES
       http/client/x509_cert_utilities_android.cpp
       pplx/pplxlinux.cpp
     )
   else()
-    list(APPEND SOURCES pplx/pplxlinux.cpp)
+    list(APPEND SOURCES pplx/pplxlinux.cpp http/client/http_client_asio.cpp)
   endif()
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${WARNINGS} -Werror -pedantic")
 elseif(WIN32)
@@ -94,6 +96,8 @@ target_link_libraries(${Casablanca_LIBRARY}
   ${Boost_FRAMEWORK}
   ${OPENSSL_LIBRARIES}
   ${COREFOUNDATION}
+  ${CFNETWORK}
+  ${SYSTEMCONFIGURATION}
   ${ANDROID_STL_FLAGS}
   )
 

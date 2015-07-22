@@ -65,9 +65,9 @@ TEST_FIXTURE(uri_address, outside_cnn_dot_com)
 
 TEST_FIXTURE(uri_address, outside_google_dot_com)
 {
-    http_client client(U("http://www.google.com"));
+    http_client client(U("http://www.root.cz"));
     http_request request(methods::GET);
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 1; ++i)
     {
         http_response response = client.request(request).get();
         VERIFY_ARE_EQUAL(status_codes::OK, response.status_code());
