@@ -234,7 +234,7 @@ TEST_FIXTURE(uri_address, set_progress_handler_upload_and_download)
     VERIFY_IS_TRUE(calls > 4);
 }
 
-TEST_FIXTURE(uri_address, set_progress_handler_open_failure)
+TEST_FIXTURE(uri_address, set_progress_handler_open_failure, "Ignore:Apple", "Reading body before connection failed")
 {
     http_client client(U("http://localhost323:-1"));
 

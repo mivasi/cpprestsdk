@@ -67,7 +67,9 @@ namespace web { namespace http
 					
 					template <class T> class corefoundation_ptr {
 					public:
-						corefoundation_ptr(const std::shared_ptr<T>& context) :m_retainCount(0), m_context(context) {};
+						corefoundation_ptr(const std::shared_ptr<T>& context) :m_retainCount(0), m_context(context) {
+						
+						}
 						
 						static void *retain(void *handler)
 						{
@@ -124,7 +126,7 @@ namespace web { namespace http
 					static void httpStreamEventCallback(CFReadStreamRef stream, CFStreamEventType eventType, void *clientCallBackInfo)
 					{
 						corefoundation_ptr<asio_context> *context = (corefoundation_ptr<asio_context> *)clientCallBackInfo;
-						context->get()->handle_http_event(eventType);
+						context->get()->handle_http_event(stream, eventType);
 					}
 					
 					static void timeoutTimerEventCallback(CFRunLoopTimerRef timer, void *clientCallBackInfo)
@@ -178,6 +180,7 @@ namespace web { namespace http
 					, m_chunked_request(false)
 					, m_timed_out(false)
 					, m_has_response_headers(false)
+					, m_need_proxy_auth(false)
 					, m_content_length_request(0)
 					{
 						
@@ -199,6 +202,7 @@ namespace web { namespace http
 					
 					void start_request()
 					{
+						m_need_proxy_auth = false;
 						if (m_request._cancellation_token().is_canceled())
 						{
 							request_context::report_error(make_error_code(std::errc::operation_canceled).value(), "Request canceled by user.");
@@ -232,6 +236,8 @@ namespace web { namespace http
 								// Stream without content length is the signal of requiring transfer encoding chunked.
 								m_chunked_request = true;
 							}
+						} else {
+							update_upload_progress_handler();
 						}
 						
 						//TODO ALL
@@ -261,9 +267,24 @@ namespace web { namespace http
 						
 						CFStreamCreateBoundPair(kCFAllocatorDefault, &m_request_body_stream_reader, &m_request_body_stream_writer, bufferSize);
 						
-						if(m_request.body()) {
+						if(m_chunked_request) {
 							m_http_stream = CFReadStreamCreateForStreamedHTTPRequest(kCFAllocatorDefault, httpMessage, m_request_body_stream_reader);
 						} else {
+							if (m_request.body()) {
+								__block int totalWasRead = 0;
+								__block int wasRead = 0;
+								__block std::string lines;
+								do {
+									read_request_body_and(^(int readSize, const std::string &line) {
+										wasRead = readSize;
+										if (readSize) {
+											lines += line;
+										}
+									});
+								} while(wasRead);
+								
+								CFHTTPMessageSetBody(httpMessage, CFDataCreate(kCFAllocatorDefault, (UInt8 *)lines.c_str(), lines.size()));
+							}
 							m_http_stream = CFReadStreamCreateForHTTPRequest(kCFAllocatorDefault, httpMessage);
 						}
 						
@@ -284,14 +305,34 @@ namespace web { namespace http
 							CFRelease(sslSettings);
 						}
 						
-						CFDictionaryRef proxySettings = SCDynamicStoreCopyProxies(NULL);
+						CFDictionaryRef proxySettings = NULL;
 						
+						web_proxy wproxy = m_http_client->client_config().proxy();
+						if (wproxy.is_disabled() == false && wproxy.is_specified()) {
+							CFMutableDictionaryRef mutableProxySetting = CFDictionaryCreateMutable(kCFAllocatorDefault, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+							uri address_uri = wproxy.address();
+							std::string adress_s = address_uri.host();
+							CFStringRef address_cfs = CFStringCreateWithCString(kCFAllocatorDefault, adress_s.c_str(), kCFStringEncodingUTF8);
+							int port_int = address_uri.port();
+							CFNumberRef port_cfn = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &port_int);
+							
+							CFDictionaryAddValue(mutableProxySetting, kCFStreamPropertyHTTPProxyHost, address_cfs);
+							CFDictionaryAddValue(mutableProxySetting, kCFStreamPropertyHTTPProxyPort, port_cfn);
+							CFDictionaryAddValue(mutableProxySetting, kCFStreamPropertyHTTPSProxyHost, address_cfs);
+							CFDictionaryAddValue(mutableProxySetting, kCFStreamPropertyHTTPSProxyPort, port_cfn);
+							
+							CFRelease(port_cfn); port_cfn = NULL;
+							CFRelease(address_cfs); address_cfs = NULL;
+							proxySettings = mutableProxySetting;
+						} else if(wproxy.is_disabled() == false && wproxy.is_default()) {
+							proxySettings = SCDynamicStoreCopyProxies(NULL);
+						}
 						
-						/*CFMutableDictionaryRef proxySettings = CFDictionaryCreateMutable(kCFAllocatorDefault, 2, NULL, NULL);
-						 CFDictionaryAddValue(proxySettings, kCFStreamPropertyHTTPProxyHost, "127.0.0.1");
-						 CFDictionaryAddValue(proxySettings, kCFStreamPropertyHTTPProxyPort, "8888");*/
-						CFReadStreamSetProperty(m_http_stream, kCFStreamPropertyHTTPProxy, proxySettings);
-						CFRelease(proxySettings);
+						if (proxySettings) {
+							CFReadStreamSetProperty(m_http_stream, kCFStreamPropertyHTTPProxy, proxySettings);
+							CFRelease(proxySettings);
+							proxySettings = NULL;
+						}
 						
 						CFRelease(httpMessage); httpMessage = NULL;
 						CFRelease(url); url = NULL;
@@ -314,6 +355,7 @@ namespace web { namespace http
 												  &streamContext))
 						{
 							CFReadStreamScheduleWithRunLoop(m_http_stream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
+							
 							if (!CFReadStreamOpen(m_http_stream)) {
 								CFStreamError myErr = CFReadStreamGetError(m_http_stream);
 								
@@ -338,7 +380,7 @@ namespace web { namespace http
 					}
 					
 				private:
-					void write_body_and_continue() {
+					void read_request_body_and(void(^andHandler)(int, const std::string &)) {
 						
 						bool is_exception = false;
 						
@@ -371,21 +413,11 @@ namespace web { namespace http
 						reset_timer();
 						
 						if(is_exception == false) {
-							
+							const std::string &line = inStringBuffer.collection();
 							reset_timer();
-							if(readSize > 0) {
-								m_uploaded += static_cast<uint64_t>(readSize);
-								const std::string &line = inStringBuffer.collection();
-								
-								CFWriteStreamWrite(m_request_body_stream_writer, (UInt8 *)line.c_str(), readSize);
-								
-								update_upload_progress_handler();
-								
-							} else {
-								if (m_request_body_stream_writer) {
-									CFWriteStreamClose(m_request_body_stream_writer);
-								}
-							}
+							m_uploaded += static_cast<uint64_t>(readSize);
+							update_upload_progress_handler();
+							andHandler(readSize, line);
 						}
 					}
 					
@@ -486,8 +518,15 @@ namespace web { namespace http
 								CFDictionaryRef headers = CFHTTPMessageCopyAllHeaderFields(myResponse);
 								CFDictionaryApplyFunction(headers, read_all_headers, &m_response.headers());
 								CFRelease(headers);
-								complete_headers();
+								
+								
 								m_has_response_headers = true;
+								if (myStatusCode == 407) {
+									m_need_proxy_auth = true;
+									return;
+								}
+								
+								complete_headers();
 							}
 						}
 					}
@@ -535,7 +574,17 @@ namespace web { namespace http
 								
 							case kCFStreamEventCanAcceptBytes:
 							{
-								write_body_and_continue();
+								if (m_chunked_request) {
+									read_request_body_and(^(int readSize, const std::string &line){
+										if(readSize > 0) {
+											CFWriteStreamWrite(m_request_body_stream_writer, (UInt8 *)line.c_str(), readSize);
+										} else {
+											if (m_request_body_stream_writer) {
+												CFWriteStreamClose(m_request_body_stream_writer);
+											}
+										}
+									});
+								}
 								break;
 							}
 							case kCFStreamEventErrorOccurred:
@@ -551,17 +600,15 @@ namespace web { namespace http
 						}
 					}
 					
-					void handle_http_event(CFStreamEventType eventType)
+					void handle_http_event(CFReadStreamRef stream, CFStreamEventType eventType)
 					{
 						reset_timer();
 						
 						switch(eventType) {
 							case kCFStreamEventOpenCompleted:
 							{
-								if(m_request.body()) {
+								if(m_chunked_request) {
 									tryWriting();
-								} else {
-									update_upload_progress_handler();
 								}
 								break;
 							}
@@ -619,8 +666,14 @@ namespace web { namespace http
 									download_content_and_continue();
 									download_headers_if_do_not_have();
 								}
-								complete_request(m_downloaded);
 								end();
+								
+								if(m_need_proxy_auth) {
+									start_request();
+								} else {
+									complete_request(m_downloaded);
+								}
+								
 								break;
 							}
 						}
@@ -642,11 +695,12 @@ namespace web { namespace http
 						stop_timer();
 						if (m_http_stream) {
 							CFReadStreamClose(m_http_stream);
-
+							
 							CFReadStreamUnscheduleFromRunLoop(m_http_stream, CFRunLoopGetCurrent(),
 															  kCFRunLoopCommonModes);
 							CFRelease(m_http_stream);
 							m_http_stream = NULL;
+							
 						}
 						
 						if (m_request_body_stream_reader) {
@@ -656,6 +710,8 @@ namespace web { namespace http
 						}
 						
 						if (m_request_body_stream_writer) {
+							CFWriteStreamUnscheduleFromRunLoop(m_request_body_stream_writer, CFRunLoopGetCurrent(),
+															  kCFRunLoopCommonModes);
 							CFWriteStreamClose(m_request_body_stream_writer);
 							CFRelease(m_request_body_stream_writer);
 							m_request_body_stream_writer = NULL;
@@ -701,7 +757,7 @@ namespace web { namespace http
 					bool m_chunked_request;
 					bool m_timed_out;
 					bool m_has_response_headers;
-					
+					bool m_need_proxy_auth;
 					uint64_t m_content_length_request;
 				};
 				
