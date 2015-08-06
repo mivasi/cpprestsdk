@@ -247,19 +247,21 @@ TEST_FIXTURE(uri_address, outside_ssl_json)
         }
     });
 }
-
-TEST_FIXTURE(uri_address, multiple_https_requests_proxy)
+	
+TEST_FIXTURE(uri_address, multiple_https_requests_proxy_no_auth/*, "Ignore", "Manual"*/)
 {
 	handle_timeout([&]
 				   {
-					   uri u(U("http://127.0.0.1:82"));
+					   uri u(U("http://127.0.0.1:81"));
 					   
 					   web_proxy proxy(u);
+					   credentials creds("basic", "cisab");
+					   proxy.set_credentials(creds);
 					   
 					   http_client_config config;
 					   config.set_proxy(proxy);
 					   
-					   http_client client(U("https://www.google.com"), config);
+					   http_client client(U("https://www.youtube.com"), config);
 					   http_response response;
 					   for(int i = 0; i < 1; ++i)
 					   {
@@ -270,6 +272,55 @@ TEST_FIXTURE(uri_address, multiple_https_requests_proxy)
 				   });
 }
 
+TEST_FIXTURE(uri_address, multiple_https_requests_proxy_basic_auth/*, "Ignore", "Manual"*/)
+{
+	handle_timeout([&]
+				   {
+					   uri u(U("http://127.0.0.1:82"));
+					   
+					   web_proxy proxy(u);
+					   credentials creds("basic", "cisab");
+					   proxy.set_credentials(creds);
+					   
+					   http_client_config config;
+					   config.set_proxy(proxy);
+					   
+					   http_client client(U("https://www.youtube.com"), config);
+					   http_response response;
+					   for(int i = 0; i < 10; ++i)
+					   {
+						   response = client.request(methods::GET).get();
+						   VERIFY_ARE_EQUAL(status_codes::OK, response.status_code());
+						   response.content_ready().wait();
+					   }
+				   });
+}
+
+TEST_FIXTURE(uri_address, multiple_https_requests_proxy_digest_auth/*, "Ignore", "Manual"*/)
+{
+	handle_timeout([&]
+				   {
+					   uri u(U("http://127.0.0.1:83"));
+					   
+					   web_proxy proxy(u);
+					   credentials creds("digest", "tsegid");
+					   proxy.set_credentials(creds);
+					   
+					   http_client_config config;
+					   config.set_proxy(proxy);
+					   
+					   http_client client(U("http://localhost"), config);
+					   http_response response;
+					   for(int i = 0; i < 10000; ++i)
+					   {
+						   response = client.request(methods::GET).get();
+						   VERIFY_ARE_EQUAL(status_codes::OK, response.status_code());
+						   response.content_ready().wait();
+					   }
+				   });
+}
+
+	
 	
 } // SUITE(outside_tests)
 
